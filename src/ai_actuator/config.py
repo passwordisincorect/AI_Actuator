@@ -3,110 +3,89 @@ from __future__ import annotations
 import json
 import os
 import secrets
-import shutil
-import threading
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Literal
 
-Permission = Literal["read-only", "workspace-write"]
-
-
-@dataclass(frozen=True)
-class WorkspaceConfig:
-    name: str
-    path: str
-    permission: Permission = "read-only"
+APP_NAME = "AI_Actuator"
 
 
-@dataclass(frozen=True)
-class AppConfig:
-    token: str
-    workspaces: list[WorkspaceConfig] = field(default_factory=list)
+def _config_base() -> Path:
+    if os.name == "nt":
+        return Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
 
 
-def _default_local_app_data() -> Path:
-    value = os.environ.get("LOCALAPPDATA")
-    if value:
-        return Path(value)
-    return Path.home() / ".local" / "share"
+def default_config_path() -> Path:
+    return _config_base() / APP_NAME / "config.json"
 
 
-class ConfigStore:
-    def __init__(self, base_dir: Path | None = None) -> None:
-        local_app_data = base_dir or _default_local_app_data()
-        self.directory = local_app_data / "AI_Actuator"
-        self.path = self.directory / "config.json"
-        self.legacy_path = local_app_data / "AIArmBridge" / "config.json"
-        self._lock = threading.RLock()
+@dataclass
+class ActuatorConfig:
+    roots: list[str] = field(default_factory=list)
+    permission: str = "read-only"  # read-only | workspace-write
+    bearer_token: str = field(default_factory=lambda: secrets.token_urlsafe(32))
+    require_token: bool = True
 
-    def load(self) -> AppConfig:
-        with self._lock:
-            self._ensure_exists()
-            raw = json.loads(self.path.read_text(encoding="utf-8"))
-            token = str(raw.get("token") or secrets.token_urlsafe(32))
-            workspaces: list[WorkspaceConfig] = []
-            for item in raw.get("workspaces", []):
-                permission = item.get("permission", "read-only")
-                if permission not in ("read-only", "workspace-write"):
-                    permission = "read-only"
-                workspaces.append(
-                    WorkspaceConfig(
-                        name=str(item["name"]),
-                        path=str(item["path"]),
-                        permission=permission,
-                    )
-                )
-            config = AppConfig(token=token, workspaces=workspaces)
-            if raw.get("token") != token:
-                self.save(config)
-            return config
+    # Keep the administration dashboard and MCP transport on separate ports.
+    # Both remain bound to loopback only.
+    host: str = "127.0.0.1"
+    admin_port: int = 8765
+    mcp_port: int = 8766
 
-    def save(self, config: AppConfig) -> None:
-        with self._lock:
-            self.directory.mkdir(parents=True, exist_ok=True)
-            temporary = self.path.with_suffix(".json.tmp")
-            payload = {
-                "token": config.token,
-                "workspaces": [asdict(workspace) for workspace in config.workspaces],
-            }
-            temporary.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
-            os.replace(temporary, self.path)
+    allowed_hosts: list[str] = field(default_factory=list)
 
-    def add_workspace(self, workspace: WorkspaceConfig) -> AppConfig:
-        with self._lock:
-            current = self.load()
-            kept = [item for item in current.workspaces if item.name != workspace.name]
-            updated = AppConfig(current.token, [*kept, workspace])
-            self.save(updated)
-            return updated
+    # Cloudflare Quick Tunnel integration. The path may be left empty for auto-discovery.
+    cloudflared_path: str = ""
+    tunnel_auto_start: bool = False
 
-    def remove_workspace(self, name: str) -> AppConfig:
-        with self._lock:
-            current = self.load()
-            updated = AppConfig(
-                current.token,
-                [item for item in current.workspaces if item.name != name],
-            )
-            self.save(updated)
-            return updated
+    @property
+    def write_enabled(self) -> bool:
+        return self.permission == "workspace-write"
 
-    def regenerate_token(self) -> AppConfig:
-        with self._lock:
-            current = self.load()
-            updated = AppConfig(secrets.token_urlsafe(32), current.workspaces)
-            self.save(updated)
-            return updated
+    def normalized(self) -> "ActuatorConfig":
+        roots: list[str] = []
+        seen: set[str] = set()
+        for raw in self.roots:
+            if not raw.strip():
+                continue
+            p = str(Path(raw).expanduser().resolve())
+            key = os.path.normcase(p)
+            if key not in seen:
+                seen.add(key)
+                roots.append(p)
+        self.roots = roots
 
-    def _ensure_exists(self) -> None:
-        if self.path.exists():
-            return
-        self.directory.mkdir(parents=True, exist_ok=True)
-        if self.legacy_path.is_file():
-            shutil.copy2(self.legacy_path, self.path)
-            return
-        self.save(AppConfig(token=secrets.token_urlsafe(32)))
+        if self.permission not in {"read-only", "workspace-write"}:
+            self.permission = "read-only"
 
+        self.admin_port = int(self.admin_port)
+        self.mcp_port = int(self.mcp_port)
+        return self
+
+
+def load_config(path: Path | None = None) -> ActuatorConfig:
+    path = path or default_config_path()
+    if not path.exists():
+        cfg = ActuatorConfig()
+        save_config(cfg, path)
+        return cfg
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+
+    # v0.1.2 used one shared `port`. Preserve an existing custom value for the
+    # local admin dashboard, while the new MCP port defaults to 8766.
+    if "port" in data and "admin_port" not in data:
+        data["admin_port"] = data["port"]
+
+    known = {f.name for f in ActuatorConfig.__dataclass_fields__.values()}
+    cfg = ActuatorConfig(**{k: v for k, v in data.items() if k in known})
+    return cfg.normalized()
+
+
+def save_config(cfg: ActuatorConfig, path: Path | None = None) -> None:
+    path = path or default_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cfg.normalized()
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(asdict(cfg), indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, path)
