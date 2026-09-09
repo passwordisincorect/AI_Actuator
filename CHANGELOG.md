@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.2.2] - 2026-09-09
+
+Optimistic-concurrency safety release.
+
+### Added
+
+- `local_read_text_file` returns full-file SHA-256 with the selected numbered content.
+- Optional `expected_sha256` guard for `local_edit_text_file`.
+- Optional `expected_sha256` guard for overwrite operations in `local_write_text_file`.
+- Structured `file_changed` tool errors with expected/actual hashes.
+- Immediate live-hash re-check before atomic replacement.
+- Backup creation from the exact hash-checked byte snapshot.
+- Audit conflict events and expected/before/after SHA-256 metadata.
+
+### Safety behavior
+
+If a file changes after the AI read it, a guarded write/edit is rejected without modifying the live file. The AI should re-read, re-evaluate, and retry with the new hash.
+
+### Compatibility
+
+`expected_sha256` is optional to preserve existing clients. Backup, rollback, audit, split ports, Bearer auth, trusted roots, and Cloudflare Quick Tunnel behavior from v0.2.1 remain available.
+
 ## [0.2.1] - 2026-09-09
 
 Safety hardening release for remote/local write workflows.

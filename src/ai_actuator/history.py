@@ -57,8 +57,17 @@ class BackupStore:
         self._lock = threading.RLock()
 
     def create(self, root_id: int, root_path: str, relative_path: str, source: Path) -> BackupRecord:
+        return self.create_bytes(root_id, root_path, relative_path, source.read_bytes())
+
+    def create_bytes(
+        self, root_id: int, root_path: str, relative_path: str, data: bytes
+    ) -> BackupRecord:
+        """Persist an already-read snapshot without re-reading the live file.
+
+        v0.2.2 uses this so the SHA-256 checked for optimistic concurrency is
+        exactly the same byte snapshot that is stored as the safety backup.
+        """
         with self._lock:
-            data = source.read_bytes()
             if len(data) > MAX_BACKUP_BYTES:
                 raise ValueError(
                     f"Existing file is too large to back up safely (> {MAX_BACKUP_BYTES} bytes)."
