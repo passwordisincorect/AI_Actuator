@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from ai_actuator.history import AuditLog, BackupStore
+from ai_actuator.history import AuditLog, BackupStore, sha256_bytes
 
 
 def test_backup_integrity_and_scope(tmp_path: Path):
@@ -21,6 +21,15 @@ def test_backup_integrity_and_scope(tmp_path: Path):
 
     with pytest.raises(ValueError):
         store.read_bytes(record.backup_id, 0, str(tmp_path / "different-root"), "x.txt")
+
+
+def test_create_bytes_backs_up_exact_checked_snapshot(tmp_path: Path):
+    store = BackupStore(tmp_path / "state")
+    snapshot = b"checked snapshot\n"
+    record = store.create_bytes(0, str(tmp_path), "x.txt", snapshot)
+    loaded, data = store.read_bytes(record.backup_id, 0, str(tmp_path), "x.txt")
+    assert data == snapshot
+    assert loaded.sha256 == sha256_bytes(snapshot)
 
 
 def test_audit_log_newest_first(tmp_path: Path):
