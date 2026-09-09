@@ -1,173 +1,141 @@
-# AI_Actuator
+# AI_Actuator v0.2.1
 
-AI_Actuator là MCP server Python chạy cục bộ trên Windows, đóng vai trò **“cánh tay”**
-cho ChatGPT hoặc Claude. AI chính là “bộ não”: AI đọc mã nguồn, suy luận rồi gọi các
-MCP tool của AI_Actuator để thao tác trong những workspace đã được người dùng cho phép.
+AI_Actuator is a safe local MCP actuator for Windows. The AI remains the reasoning layer; AI_Actuator provides constrained filesystem and Git tools inside explicitly trusted workspaces.
+
+## v0.2.1 highlights
+
+v0.2.1 keeps the v0.2.0 split-port + Cloudflare remote MCP architecture and adds a safety history layer for write operations:
+
+- **Automatic backup before overwrite/edit**.
+- **Rollback tool** that restores a selected backup.
+- Rollback first creates a **safety backup of the current file**, so a rollback itself can be reversed.
+- **Append-only audit log** for write/edit/rollback success and failures.
+- Audit entries contain metadata and SHA-256 hashes, **never file contents or Bearer tokens**.
+- Backup integrity is checked using SHA-256 before restore.
+- Up to 20 automatic backups are retained per file.
+- Audit log rotates at roughly 5 MB.
+
+v0.2.0 features remain:
+
+- Local-only admin dashboard on `127.0.0.1:8765`.
+- MCP + health endpoint on `127.0.0.1:8766`.
+- Built-in Cloudflare Quick Tunnel manager.
+- Dashboard **Start Tunnel / Stop Tunnel / Copy URL** controls.
+- Dynamic Quick Tunnel hostname allowlisting in memory.
+- Optional tunnel auto-start.
+- Bearer authentication enabled by default.
+- No arbitrary shell, delete tool, Codex task runner, or Claude Code agent.
+
+## MCP tools
+
+- `local_list_roots`
+- `local_list_directory`
+- `local_read_text_file`
+- `local_search_text`
+- `local_write_text_file`
+- `local_edit_text_file`
+- `local_list_backups` **new in v0.2.1**
+- `local_rollback_text_file` **new in v0.2.1**
+- `local_read_audit_log` **new in v0.2.1**
+- `local_git_status`
+- `local_git_diff`
+
+## Backup / rollback flow
+
+When an existing file is overwritten or exact-edited:
 
 ```text
-Người dùng → ChatGPT / Claude → MCP → AI_Actuator → filesystem / Git
+existing file
+   ↓
+automatic backup + SHA-256
+   ↓
+atomic write/edit
+   ↓
+audit event
 ```
 
-AI_Actuator không gọi thêm Codex CLI, Claude Code, coding agent, local AI/Ollama hay
-API mô hình khác. Dự án cũng cố ý không cung cấp arbitrary shell và không có tool xóa file.
+To restore an older version:
 
-## Phiên bản hiện tại
+1. Call `local_list_backups` with `root_id` and a relative `path`.
+2. Copy the desired `backup_id`.
+3. Call `local_rollback_text_file` with the same root/path and `backup_id`.
+4. AI_Actuator backs up the current file before restoring the older snapshot.
 
-`0.2.0`
-
-## Chức năng
-
-- `local_list_roots`: liệt kê workspace được tin cậy.
-- `local_list_directory`: liệt kê thư mục trong workspace.
-- `local_read_text_file`: đọc file văn bản.
-- `local_search_text`: tìm chuỗi trong file văn bản.
-- `local_write_text_file`: tạo hoặc ghi file khi workspace có quyền ghi.
-- `local_edit_text_file`: thay thế chính xác văn bản với số lần khớp bắt buộc.
-- `local_git_status`: xem `git status --short`.
-- `local_git_diff`: xem diff chưa commit.
-
-## Endpoint v0.2.0
-
-AI_Actuator tách riêng Admin và MCP để tunnel không bao giờ phải expose trang setup:
+Backups and audit history are stored next to the AI_Actuator config, normally:
 
 ```text
-Admin:  http://127.0.0.1:8765/setup
-MCP:    http://127.0.0.1:8766/mcp
-Health: http://127.0.0.1:8766/health
+%LOCALAPPDATA%\AI_Actuator\backups\
+%LOCALAPPDATA%\AI_Actuator\audit.jsonl
 ```
 
-Kiểm tra mong đợi:
+They are not stored inside the trusted project workspace.
 
-```text
-http://127.0.0.1:8766/setup  -> 404
-http://127.0.0.1:8765/mcp    -> 404
-http://127.0.0.1:8766/mcp    -> 401 nếu không có Bearer token
-```
-
-Nếu dùng Cloudflare Tunnel ở bước tiếp theo, tunnel phải trỏ vào `127.0.0.1:8766`,
-không phải port Admin `8765`.
-
-## Mô hình bảo mật
-
-- Cả hai server chỉ bind loopback tại `127.0.0.1`.
-- Admin dashboard ở port `8765` và được HostGuard giới hạn local-only.
-- MCP ở port `8766` và yêu cầu `Authorization: Bearer <token>`.
-- Chỉ truy cập các workspace được thêm tại trang setup.
-- Workspace mặc định là `read-only`; phải chủ động bật `workspace-write` mới được sửa.
-- Chặn path traversal, đường dẫn tuyệt đối, symlink và Windows junction/reparse point.
-- Chặn `.env`, `.ssh`, `.git`, khóa/chứng thư và các đường dẫn giống credential.
-- Giới hạn đọc/ghi mỗi file ở mức 1 MiB.
-- Lệnh Git được cố định bằng danh sách tham số; không chạy shell tùy ý.
-- Không có tool xóa file.
-- MCP Inspector từ browser chỉ được CORS cho origin loopback.
-
-Không nên cấp toàn bộ ổ `C:\` hoặc `D:\`. Hãy chỉ cấp thư mục dự án cụ thể, ví dụ
-`D:\STM32\StepperMotorLCD`.
-
-## Cài đặt trên Windows
-
-Yêu cầu Python 3.10 trở lên.
+## Install / upgrade
 
 ```powershell
 cd D:\AI_Actuator
-python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e .
 ```
 
-Chạy server:
+Run:
 
 ```powershell
 .\.venv\Scripts\python.exe -m ai_actuator
 ```
 
-Hoặc nhấp đúp `run.bat`.
-
-Khi chạy đúng v0.2.0, terminal sẽ hiển thị các endpoint Admin, MCP và Health riêng biệt.
-
-Mở trang cấu hình:
+Dashboard:
 
 ```text
 http://127.0.0.1:8765/setup
 ```
 
-Tại đây:
-
-1. Thêm đường dẫn workspace cụ thể.
-2. Chọn `read-only` hoặc `workspace-write`.
-3. Sao chép Bearer token để cấu hình MCP client.
-
-Cấu hình được lưu tại:
+Local MCP:
 
 ```text
-%LOCALAPPDATA%\AI_Actuator\config.json
+http://127.0.0.1:8766/mcp
 ```
 
-Nếu chỉ có cấu hình cũ tại `%LOCALAPPDATA%\AIArmBridge\config.json`, chương trình sẽ
-nhập cấu hình đó vào vị trí mới trong lần chạy đầu tiên.
-
-## Kết nối MCP Inspector
-
-```powershell
-npx @modelcontextprotocol/inspector
-```
-
-Thiết lập:
-
-| Trường | Giá trị |
-| --- | --- |
-| Transport | `Streamable HTTP` |
-| URL | `http://127.0.0.1:8766/mcp` |
-| Header | `Authorization` |
-| Value | `Bearer <token-trên-trang-setup>` |
-
-Nếu mở `/mcp` trực tiếp bằng Chrome và thấy `{"error":"unauthorized"}` thì đó là
-hành vi đúng: trình duyệt không tự gửi Bearer token.
-
-## Quy trình chỉnh sửa khuyến nghị
+Health:
 
 ```text
-local_search_text
-  → local_read_text_file
-  → AI phân tích
-  → local_edit_text_file
-  → local_read_text_file
-  → local_git_diff
+http://127.0.0.1:8766/health
 ```
 
-`local_edit_text_file` chỉ ghi khi số lần `old_text` xuất hiện đúng bằng
-`expected_replacements`, nhờ đó tránh thay nhầm nhiều vị trí.
+## Cloudflare Quick Tunnel
 
-## Kiểm thử
+From `/setup`, click **Start Tunnel**. The dashboard displays a URL such as:
+
+```text
+https://random-name.trycloudflare.com/mcp
+```
+
+Use the Bearer token from the local dashboard:
+
+```text
+Authorization: Bearer <token>
+```
+
+Quick Tunnel URLs change after restart and are intended for testing/development.
+
+## Security defaults
+
+- Servers bind only to `127.0.0.1`.
+- `/setup` is isolated on port 8765 and is not exposed by the built-in tunnel.
+- MCP Host validation remains enabled.
+- Default workspace permission is `read-only`.
+- Paths must be relative to a configured trusted root.
+- Path traversal, sensitive paths, symlinks/junctions/reparse points remain blocked.
+- Read/write text size is limited to about 1 MB per file.
+- Existing files larger than the backup safety limit are refused for overwrite because they cannot be safely snapshotted.
+- No arbitrary shell or permanent delete tool.
+
+Do not grant an entire drive such as `D:\` with `workspace-write`; grant only the project folders the AI actually needs.
+
+## Tests
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-## Build EXE
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\build_exe.ps1
-```
-
-File dự kiến:
-
-```text
-dist\AI_Actuator.exe
-```
-
-## Trạng thái và hướng phát triển
-
-Đã xác nhận trong quá trình phát triển local: MCP Inspector kết nối được, `local_list_roots`,
-đọc file và exact edit trên file Windows thật đã hoạt động. v0.2.0 bổ sung kiến trúc split-port
-để chuẩn bị tunnel an toàn chỉ vào MCP port `8766`.
-
-Ưu tiên tiếp theo:
-
-1. Hoàn thiện Cloudflare / secure tunnel vào `127.0.0.1:8766`.
-2. Kiểm tra remote MCP end-to-end.
-3. Claude Desktop Extension `AI_Actuator.mcpb`.
-4. GUI Windows: Browse Folder, Start/Stop, trạng thái kết nối, system tray và auto-start.
-5. Windows installer / EXE.
-
-Xem thêm [kiến trúc](docs/ARCHITECTURE.md) và [chính sách bảo mật](docs/SECURITY.md).
+The v0.2.1 source package includes tests for backup integrity, rollback, audit logging, existing security rules, and Quick Tunnel parsing/management.
