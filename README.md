@@ -11,6 +11,10 @@ Người dùng → ChatGPT / Claude → MCP → AI_Actuator → filesystem / Git
 AI_Actuator không gọi thêm Codex CLI, Claude Code, coding agent, local AI/Ollama hay
 API mô hình khác. Dự án cũng cố ý không cung cấp arbitrary shell và không có tool xóa file.
 
+## Phiên bản hiện tại
+
+`0.2.0`
+
 ## Chức năng
 
 - `local_list_roots`: liệt kê workspace được tin cậy.
@@ -22,10 +26,32 @@ API mô hình khác. Dự án cũng cố ý không cung cấp arbitrary shell v�
 - `local_git_status`: xem `git status --short`.
 - `local_git_diff`: xem diff chưa commit.
 
+## Endpoint v0.2.0
+
+AI_Actuator tách riêng Admin và MCP để tunnel không bao giờ phải expose trang setup:
+
+```text
+Admin:  http://127.0.0.1:8765/setup
+MCP:    http://127.0.0.1:8766/mcp
+Health: http://127.0.0.1:8766/health
+```
+
+Kiểm tra mong đợi:
+
+```text
+http://127.0.0.1:8766/setup  -> 404
+http://127.0.0.1:8765/mcp    -> 404
+http://127.0.0.1:8766/mcp    -> 401 nếu không có Bearer token
+```
+
+Nếu dùng Cloudflare Tunnel ở bước tiếp theo, tunnel phải trỏ vào `127.0.0.1:8766`,
+không phải port Admin `8765`.
+
 ## Mô hình bảo mật
 
-- Chỉ bind tại `127.0.0.1:8765`.
-- MCP yêu cầu `Authorization: Bearer <token>`.
+- Cả hai server chỉ bind loopback tại `127.0.0.1`.
+- Admin dashboard ở port `8765` và được HostGuard giới hạn local-only.
+- MCP ở port `8766` và yêu cầu `Authorization: Bearer <token>`.
 - Chỉ truy cập các workspace được thêm tại trang setup.
 - Workspace mặc định là `read-only`; phải chủ động bật `workspace-write` mới được sửa.
 - Chặn path traversal, đường dẫn tuyệt đối, symlink và Windows junction/reparse point.
@@ -33,6 +59,7 @@ API mô hình khác. Dự án cũng cố ý không cung cấp arbitrary shell v�
 - Giới hạn đọc/ghi mỗi file ở mức 1 MiB.
 - Lệnh Git được cố định bằng danh sách tham số; không chạy shell tùy ý.
 - Không có tool xóa file.
+- MCP Inspector từ browser chỉ được CORS cho origin loopback.
 
 Không nên cấp toàn bộ ổ `C:\` hoặc `D:\`. Hãy chỉ cấp thư mục dự án cụ thể, ví dụ
 `D:\STM32\StepperMotorLCD`.
@@ -55,6 +82,8 @@ Chạy server:
 
 Hoặc nhấp đúp `run.bat`.
 
+Khi chạy đúng v0.2.0, terminal sẽ hiển thị các endpoint Admin, MCP và Health riêng biệt.
+
 Mở trang cấu hình:
 
 ```text
@@ -67,7 +96,7 @@ Tại đây:
 2. Chọn `read-only` hoặc `workspace-write`.
 3. Sao chép Bearer token để cấu hình MCP client.
 
-Cấu hình được lưu sau khi khởi động lại Windows tại:
+Cấu hình được lưu tại:
 
 ```text
 %LOCALAPPDATA%\AI_Actuator\config.json
@@ -87,7 +116,7 @@ Thiết lập:
 | Trường | Giá trị |
 | --- | --- |
 | Transport | `Streamable HTTP` |
-| URL | `http://127.0.0.1:8765/mcp` |
+| URL | `http://127.0.0.1:8766/mcp` |
 | Header | `Authorization` |
 | Value | `Bearer <token-trên-trang-setup>` |
 
@@ -129,17 +158,16 @@ dist\AI_Actuator.exe
 
 ## Trạng thái và hướng phát triển
 
-Nguyên mẫu trước khi đưa lên repository đã kết nối MCP Inspector và thử thành công
-`local_list_roots`, đọc file, exact edit trên file Windows thật. Bản mã nguồn tái tạo
-trong repository cần được chạy lại bài kiểm thử end-to-end trên Windows trước khi phát hành.
+Đã xác nhận trong quá trình phát triển local: MCP Inspector kết nối được, `local_list_roots`,
+đọc file và exact edit trên file Windows thật đã hoạt động. v0.2.0 bổ sung kiến trúc split-port
+để chuẩn bị tunnel an toàn chỉ vào MCP port `8766`.
 
 Ưu tiên tiếp theo:
 
-1. Kết nối Claude Desktop bằng local MCP.
-2. Đóng gói Claude Desktop Extension `AI_Actuator.mcpb`.
-3. GUI Windows: Browse Folder, Start/Stop, trạng thái kết nối, system tray và auto-start.
-4. Windows installer / EXE.
-5. ChatGPT remote MCP qua tunnel bảo mật ở giai đoạn sau.
+1. Hoàn thiện Cloudflare / secure tunnel vào `127.0.0.1:8766`.
+2. Kiểm tra remote MCP end-to-end.
+3. Claude Desktop Extension `AI_Actuator.mcpb`.
+4. GUI Windows: Browse Folder, Start/Stop, trạng thái kết nối, system tray và auto-start.
+5. Windows installer / EXE.
 
 Xem thêm [kiến trúc](docs/ARCHITECTURE.md) và [chính sách bảo mật](docs/SECURITY.md).
-
