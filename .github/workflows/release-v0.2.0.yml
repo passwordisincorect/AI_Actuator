@@ -1,9 +1,9 @@
-name: Validate and Tag v0.2.0
+name: Publish corrected v0.2.0
 
 on:
   push:
     branches:
-      - main
+      - release-helper-v020
     paths:
       - .github/workflows/release-v0.2.0.yml
 
@@ -14,29 +14,20 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repository
+      - name: Check out helper branch
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install project and test dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]" httpx
-
-      - name: Run test suite
-        run: python -m pytest
-
-      - name: Restore corrected v0.2.0 tag
+      - name: Publish corrected tag and release
         env:
-          TARGET_COMMIT: 4226d6e2aea06ae0ba14e74eee887f4055da4928
+          GH_TOKEN: ${{ github.token }}
+          TARGET_COMMIT: 8948dbbb4899d52f22cd3ebd052aa5feda8f3320
         shell: bash
         run: |
           set -euo pipefail
-          git tag -f v0.2.0 "$TARGET_COMMIT"
-          git push --force origin refs/tags/v0.2.0
+          gh release create v0.2.0 \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$TARGET_COMMIT" \
+            --title "AI_Actuator v0.2.0" \
+            --notes "Corrected v0.2.0 synchronized with the completed AI_Actuator chat implementation. Admin is local-only on 127.0.0.1:8765, MCP is on 127.0.0.1:8766, /health is on 8766, non-MCP paths on the MCP port return 404, and Bearer authentication remains required for /mcp. Cloudflare remote exposure itself is not included yet."
