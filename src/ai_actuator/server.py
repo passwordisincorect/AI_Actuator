@@ -9,11 +9,13 @@ from urllib.parse import parse_qs
 
 from mcp.server.mcpserver import MCPServer
 from starlette.applications import Starlette
+from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Mount, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from . import __version__
 from .config import ConfigStore, WorkspaceConfig
 from .ops import LocalOperations
 from .security import (
@@ -24,7 +26,10 @@ from .security import (
 )
 
 HOST = "127.0.0.1"
-PORT = 8765
+ADMIN_PORT = 8765
+MCP_PORT = 8766
+# Backward-compatible alias for code that used PORT as the local setup port.
+PORT = ADMIN_PORT
 
 store = ConfigStore()
 policy = SecurityPolicy(store)
@@ -102,18 +107,31 @@ def local_git_diff(workspace: str, path: str | None = None) -> dict[str, Any]:
     return ops.git_diff(workspace, path)
 
 
+def _request_host(scope: Scope) -> str:
+    headers = {key.lower(): value for key, value in scope.get("headers", [])}
+    raw_host = headers.get(b"host", b"").decode("ascii", errors="ignore").strip()
+    if raw_host.startswith("["):
+        closing = raw_host.find("]")
+        if closing >= 0:
+            return raw_host[: closing + 1].lower()
+    return raw_host.split(":", 1)[0].lower()
+
+
 class HostGuardMiddleware:
+    """Keep the administration app local-only, even if routing is misconfigured."""
+
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] == "http":
-            headers = {key.lower(): value for key, value in scope.get("headers", [])}
-            host = headers.get(b"host", b"").decode("ascii", errors="ignore").split(":", 1)[0]
-            if host not in {"127.0.0.1", "localhost", "[::1]"}:
-                response = JSONResponse({"error": "invalid_host"}, status_code=421)
-                await response(scope, receive, send)
-                return
+        if scope["type"] == "http" and _request_host(scope) not in {
+            "127.0.0.1",
+            "localhost",
+            "[::1]",
+        }:
+            response = JSONResponse({"error": "invalid_host"}, status_code=421)
+            await response(scope, receive, send)
+            return
         await self.app(scope, receive, send)
 
 
@@ -163,7 +181,10 @@ th,td{{border:1px solid #d5d8dc;padding:8px;text-align:left}}label{{display:bloc
 input[type=text]{{width:100%;box-sizing:border-box;padding:8px}}button,select{{padding:8px}}
 .token{{overflow-wrap:anywhere;background:#f4f6f7;padding:12px}}.ok{{color:#196f3d}}.error{{color:#b03a2e}}
 </style></head><body>
-<h1>AI_Actuator</h1><p>MCP: <code>http://127.0.0.1:8765/mcp</code></p>
+<h1>AI_Actuator <small>v{html.escape(__version__)}</small></h1>
+<p>Admin: <code>http://{HOST}:{ADMIN_PORT}/setup</code></p>
+<p>MCP: <code>http://{HOST}:{MCP_PORT}/mcp</code></p>
+<p>Health: <code>http://{HOST}:{MCP_PORT}/health</code></p>
 {notice}{problem}
 <h2>Bearer token</h2><p class='token'><code>{html.escape(config.token)}</code></p>
 <form method='post' action='/setup/token'><button type='submit'>Tạo token mới</button></form>
@@ -208,6 +229,19 @@ async def regenerate_token(request: Request) -> Response:
     return _setup_redirect(message="Đã tạo token mới; hãy cập nhật MCP client.")
 
 
+async def health(_request: Request) -> Response:
+    config = store.load()
+    return JSONResponse(
+        {
+            "status": "ok",
+            "name": "AI_Actuator",
+            "version": __version__,
+            "workspaces": len(config.workspaces),
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 async def _read_form(request: Request) -> dict[str, str]:
     body = (await request.body()).decode("utf-8", errors="strict")
     parsed = parse_qs(body, keep_blank_values=True, max_num_fields=20)
@@ -221,25 +255,53 @@ def _setup_redirect(*, message: str = "", error: str = "") -> RedirectResponse:
     return RedirectResponse(f"/setup?{query}", status_code=303)
 
 
-mcp_app = mcp.streamable_http_app(json_response=True)
-protected_mcp_app = BearerAuthMiddleware(mcp_app, lambda: store.load().token)
+sdk_mcp_app = mcp.streamable_http_app(json_response=True)
+protected_mcp_app = BearerAuthMiddleware(sdk_mcp_app, lambda: store.load().token)
 
 
 @contextlib.asynccontextmanager
-async def lifespan(app: Starlette):
+async def mcp_lifespan(app: Starlette):
     store.load()
     async with mcp.session_manager.run():
         yield
 
 
-starlette_app = Starlette(
+_admin_starlette_app = Starlette(
     routes=[
         Route("/setup", setup_page, methods=["GET"]),
         Route("/setup/workspaces", add_workspace, methods=["POST"]),
         Route("/setup/workspaces/remove", remove_workspace, methods=["POST"]),
         Route("/setup/token", regenerate_token, methods=["POST"]),
+    ]
+)
+admin_app = HostGuardMiddleware(_admin_starlette_app)
+
+_mcp_starlette_app = Starlette(
+    routes=[
+        Route("/health", health, methods=["GET"]),
         Mount("/", app=protected_mcp_app),
     ],
-    lifespan=lifespan,
+    lifespan=mcp_lifespan,
 )
-app = HostGuardMiddleware(starlette_app)
+
+# MCP Inspector runs in a browser on another localhost port. Allow only loopback
+# browser origins while keeping arbitrary websites blocked by CORS.
+mcp_app = CORSMiddleware(
+    _mcp_starlette_app,
+    allow_origin_regex=r"^https?://(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$",
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "Accept",
+        "Mcp-Session-Id",
+        "Last-Event-ID",
+    ],
+    expose_headers=["Mcp-Session-Id"],
+    max_age=600,
+)
+
+# Backward compatibility for code that imports ai_actuator.server:app.
+# The public MCP transport is intentionally NOT served by this alias.
+app = admin_app
