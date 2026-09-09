@@ -1,0 +1,37 @@
+name: Publish v0.1.2
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/release-v0.1.2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_COMMIT: 343aca69009bd984e8fd3add9607ffb164249df9
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view v0.1.2 >/dev/null 2>&1; then
+            echo "v0.1.2 already exists; nothing to do."
+            exit 0
+          fi
+          gh release create v0.1.2 \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$TARGET_COMMIT" \
+            --title "AI_Actuator v0.1.2" \
+            --notes "Maintenance release for the 0.1.x line. Version metadata is synchronized to 0.1.2. See CHANGELOG.md for details."
