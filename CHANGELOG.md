@@ -2,6 +2,23 @@
 
 Tất cả thay đổi đáng chú ý của AI_Actuator sẽ được ghi lại tại đây.
 
+## [0.1.2] - 2026-09-09
+
+Bản cập nhật maintenance cho nhánh 0.1.x.
+
+### Thay đổi
+
+- Đồng bộ phiên bản package và project lên `0.1.2`.
+- Giữ nguyên phạm vi chức năng local MCP đã có ở v0.1.0.
+- Chuẩn hóa mốc phát hành tiếp theo cho quá trình phát triển Cloudflare / remote MCP.
+
+### Chưa thuộc v0.1.2
+
+- Cloudflare / remote MCP cho ChatGPT.
+- Claude Desktop Extension `.mcpb`.
+- GUI Windows, system tray và auto-start.
+- Windows installer hoàn chỉnh.
+
 ## [0.1.0] - 2026-09-09
 
 Bản phát hành đầu tiên của AI_Actuator: MCP server Python chạy cục bộ trên Windows, cho phép AI thao tác an toàn trong các workspace được người dùng cấp quyền.
