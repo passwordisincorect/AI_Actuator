@@ -135,6 +135,22 @@ class HostGuardMiddleware:
         await self.app(scope, receive, send)
 
 
+class MCPPathGuardMiddleware:
+    """Expose only the MCP transport path on the MCP server."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            path = scope.get("path", "")
+            if path != "/mcp" and not path.startswith("/mcp/"):
+                response = JSONResponse({"error": "not_found"}, status_code=404)
+                await response(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
 class BearerAuthMiddleware:
     def __init__(self, app: ASGIApp, token_provider: Callable[[], str]) -> None:
         self.app = app
@@ -256,7 +272,9 @@ def _setup_redirect(*, message: str = "", error: str = "") -> RedirectResponse:
 
 
 sdk_mcp_app = mcp.streamable_http_app(json_response=True)
-protected_mcp_app = BearerAuthMiddleware(sdk_mcp_app, lambda: store.load().token)
+protected_mcp_app = MCPPathGuardMiddleware(
+    BearerAuthMiddleware(sdk_mcp_app, lambda: store.load().token)
+)
 
 
 @contextlib.asynccontextmanager
