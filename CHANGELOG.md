@@ -4,13 +4,19 @@ Tất cả thay đổi đáng chú ý của AI_Actuator sẽ được ghi lại 
 
 ## [0.2.0] - 2026-09-09
 
-Mốc phát hành mở đầu cho nhánh 0.2.x của AI_Actuator.
+Bản 0.2.0 đồng bộ với phần đã hoàn thiện trong quá trình phát triển AI_Actuator.
 
 ### Thay đổi
 
 - Nâng version project và package lên `0.2.0`.
-- Giữ nguyên nền tảng local MCP an toàn đã hoàn thiện ở nhánh 0.1.x.
-- Thiết lập mốc phát triển tiếp theo cho remote MCP / Cloudflare Tunnel.
+- Tách Admin dashboard và MCP transport thành hai cổng riêng:
+  - Admin: `http://127.0.0.1:8765/setup`
+  - MCP: `http://127.0.0.1:8766/mcp`
+  - Health: `http://127.0.0.1:8766/health`
+- Port MCP không phục vụ `/setup`; port Admin không phục vụ `/mcp`.
+- `/mcp` vẫn yêu cầu `Authorization: Bearer <token>`.
+- Thêm CORS giới hạn cho MCP Inspector chạy từ origin loopback.
+- Giữ nguyên trusted workspace, `read-only` / `workspace-write`, exact edit và các lớp SecurityPolicy hiện có.
 
 ### Phạm vi hiện tại
 
@@ -20,11 +26,11 @@ Mốc phát hành mở đầu cho nhánh 0.2.x của AI_Actuator.
 - Đọc, tìm kiếm, ghi và exact-edit file văn bản.
 - `git status` và `git diff` read-only.
 - SecurityPolicy chống path traversal, symlink/reparse point và truy cập đường dẫn nhạy cảm.
+- Admin/MCP split-port để chuẩn bị tunnel chỉ vào port `8766`.
 
 ### Chưa triển khai trong v0.2.0
 
-- Cloudflare / remote MCP cho ChatGPT.
-- Tách riêng public MCP endpoint và local `/setup`.
+- Cloudflare Tunnel / remote MCP hoàn chỉnh cho ChatGPT.
 - Claude Desktop Extension `.mcpb`.
 - GUI Windows, system tray và auto-start.
 - Windows installer hoàn chỉnh.
@@ -67,19 +73,8 @@ Bản phát hành đầu tiên của AI_Actuator: MCP server Python chạy cục
 - Exact-edit với `expected_replacements` để tránh sửa nhầm vị trí.
 - Bảo vệ path traversal, absolute path, symlink và Windows reparse point.
 - Chặn các đường dẫn/file nhạy cảm như `.env`, `.ssh`, `.git`, credential và private key.
-- Giới hạn đọc/ghi file ở mức 1 MiB.
+- Giới hạn đọc/ghi mỗi file ở mức 1 MiB.
 - Git chỉ chạy các lệnh read-only đã cố định, không cung cấp arbitrary shell.
 - Lưu cấu hình tại `%LOCALAPPDATA%\AI_Actuator\config.json` và hỗ trợ migrate từ `AIArmBridge`.
 - Có test cho operations và security policy.
 - Có script chạy Windows và script build EXE bằng PyInstaller.
-
-### Chưa thuộc v0.1.0
-
-- Cloudflare / remote MCP cho ChatGPT.
-- Claude Desktop Extension `.mcpb`.
-- GUI Windows, system tray và auto-start.
-- Windows installer hoàn chỉnh.
-
-### Ghi chú
-
-Bản v0.1.0 nên được xem là bản phát hành đầu tiên của local MCP prototype. Cần chạy lại kiểm thử end-to-end trên Windows trước khi coi là bản production-ready.
