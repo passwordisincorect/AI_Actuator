@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 from .config import ActuatorConfig, default_config_path
-from .history import AuditLog, BackupStore
+from .history import AuditLog, BackupStore, sha256_bytes
 from .security import ActuatorSecurityError, resolve_in_root
 
 MAX_READ_BYTES = 1_000_000
@@ -15,6 +15,20 @@ MAX_WRITE_BYTES = 1_000_000
 MAX_LIST_ENTRIES = 300
 MAX_SEARCH_RESULTS = 100
 SKIP_DIRS = {".git", ".venv", "venv", "node_modules", "build", "dist", "__pycache__"}
+
+
+class FileChangedError(ActuatorSecurityError):
+    """Optimistic-concurrency conflict: the live file no longer matches the expected state."""
+
+    def __init__(
+        self,
+        expected_sha256: str | None,
+        actual_sha256: str | None,
+        message: str = "File changed since it was read; no changes made.",
+    ) -> None:
+        self.expected_sha256 = expected_sha256
+        self.actual_sha256 = actual_sha256
+        super().__init__(message)
 
 
 class WorkspaceOps:
@@ -52,7 +66,53 @@ class WorkspaceOps:
                 h.update(chunk)
         return h.hexdigest()
 
+    @staticmethod
+    def _normalize_expected_sha256(expected_sha256: str | None) -> str | None:
+        value = (expected_sha256 or "").strip().lower()
+        if not value:
+            return None
+        if len(value) != 64 or any(ch not in "0123456789abcdef" for ch in value):
+            raise ActuatorSecurityError("expected_sha256 must be a 64-character hexadecimal SHA-256 digest.")
+        return value
+
+    @staticmethod
+    def _assert_expected_sha256(
+        expected_sha256: str | None, actual_sha256: str | None
+    ) -> None:
+        expected = WorkspaceOps._normalize_expected_sha256(expected_sha256)
+        if expected is not None and expected != actual_sha256:
+            raise FileChangedError(expected, actual_sha256)
+
+    @staticmethod
+    def _assert_live_sha256(target: Path, expected_sha256: str | None) -> None:
+        """Re-check the live file immediately before the atomic replacement."""
+        if expected_sha256 is None:
+            if target.exists():
+                actual = WorkspaceOps._sha256_file(target) if target.is_file() else None
+                raise FileChangedError(None, actual, "Target appeared during write preparation; no changes made.")
+            return
+        if not target.is_file():
+            raise FileChangedError(expected_sha256, None)
+        actual = WorkspaceOps._sha256_file(target)
+        if actual != expected_sha256:
+            raise FileChangedError(expected_sha256, actual)
+
+    def _audit_conflict(
+        self, action: str, *, root_id: int, path: str, exc: FileChangedError
+    ) -> None:
+        self._audit_event(
+            action,
+            status="conflict",
+            root_id=root_id,
+            path=path,
+            error="file_changed",
+            expected_sha256=exc.expected_sha256,
+            actual_sha256=exc.actual_sha256,
+        )
+
     def _audit_event(self, action: str, *, status: str, **fields: object) -> None:
+        # Audit logging is best-effort: a logging I/O failure must never make a
+        # successful filesystem mutation look like it failed (or mask the original error).
         try:
             self.audit.append(action, status=status, **fields)
         except OSError:
@@ -81,7 +141,9 @@ class WorkspaceOps:
             )
         return rows
 
-    def read_text(self, root_id: int, path: str, start_line: int = 1, end_line: int = 400) -> str:
+    def read_text(
+        self, root_id: int, path: str, start_line: int = 1, end_line: int = 400
+    ) -> dict[str, object]:
         target = self.resolve(root_id, path)
         if not target.is_file():
             raise ActuatorSecurityError("Target is not a file.")
@@ -95,7 +157,17 @@ class WorkspaceOps:
         start = max(1, int(start_line))
         end = max(start, min(int(end_line), start + 999))
         selected = lines[start - 1 : end]
-        return "\n".join(f"{i}: {line}" for i, line in enumerate(selected, start=start))
+        rendered = "\n".join(f"{i}: {line}" for i, line in enumerate(selected, start=start))
+        actual_end = start + len(selected) - 1 if selected else start - 1
+        return {
+            "path": path,
+            "content": rendered,
+            "sha256": sha256_bytes(data),
+            "bytes": len(data),
+            "start_line": start,
+            "end_line": actual_end,
+            "total_lines": len(lines),
+        }
 
     def search_text(self, root_id: int, query: str, path: str = "", max_results: int = 50) -> list[dict[str, object]]:
         if not query:
@@ -132,10 +204,18 @@ class WorkspaceOps:
         if not self.config.write_enabled:
             raise ActuatorSecurityError("Write permission is disabled. Set permission=workspace-write in /setup.")
 
-    def write_text(self, root_id: int, path: str, content: str, overwrite: bool = False) -> dict[str, object]:
+    def write_text(
+        self,
+        root_id: int,
+        path: str,
+        content: str,
+        overwrite: bool = False,
+        expected_sha256: str = "",
+    ) -> dict[str, object]:
         action = "write_text"
         try:
             self._require_write()
+            expected = self._normalize_expected_sha256(expected_sha256)
             encoded = content.encode("utf-8")
             if len(encoded) > MAX_WRITE_BYTES:
                 raise ActuatorSecurityError(f"Content is too large (> {MAX_WRITE_BYTES} bytes).")
@@ -149,15 +229,23 @@ class WorkspaceOps:
 
             backup = None
             before_sha = None
+            snapshot: bytes | None = None
             if existed_before:
-                before_sha = self._sha256_file(target)
+                snapshot = target.read_bytes()
+                before_sha = sha256_bytes(snapshot)
+                self._assert_expected_sha256(expected, before_sha)
                 try:
-                    backup = self.backups.create(root_id, str(self.root(root_id)), relative, target)
+                    backup = self.backups.create_bytes(
+                        root_id, str(self.root(root_id)), relative, snapshot
+                    )
                 except ValueError as exc:
                     raise ActuatorSecurityError(str(exc)) from exc
+            elif expected is not None:
+                raise FileChangedError(expected, None, "Expected file state no longer exists; no changes made.")
 
             target.parent.mkdir(parents=True, exist_ok=True)
             self.resolve(root_id, str(target.parent.relative_to(self.root(root_id))))
+            self._assert_live_sha256(target, before_sha)
             self._atomic_write(target, content)
             after_sha = self._sha256_file(target)
             result = {
@@ -165,7 +253,9 @@ class WorkspaceOps:
                 "bytes": len(encoded),
                 "overwritten": existed_before,
                 "backup_id": backup.backup_id if backup else None,
+                "before_sha256": before_sha,
                 "sha256": after_sha,
+                "guarded": expected is not None,
             }
             self._audit_event(
                 action,
@@ -176,18 +266,31 @@ class WorkspaceOps:
                 overwritten=existed_before,
                 bytes=len(encoded),
                 backup_id=backup.backup_id if backup else None,
+                expected_sha256=expected,
                 before_sha256=before_sha,
                 after_sha256=after_sha,
             )
             return result
+        except FileChangedError as exc:
+            self._audit_conflict(action, root_id=root_id, path=path, exc=exc)
+            raise
         except Exception as exc:
             self._audit_event(action, status="error", root_id=root_id, path=path, error=str(exc))
             raise
 
-    def edit_text(self, root_id: int, path: str, old_text: str, new_text: str, expected_replacements: int = 1) -> dict[str, object]:
+    def edit_text(
+        self,
+        root_id: int,
+        path: str,
+        old_text: str,
+        new_text: str,
+        expected_replacements: int = 1,
+        expected_sha256: str = "",
+    ) -> dict[str, object]:
         action = "edit_text"
         try:
             self._require_write()
+            expected_hash = self._normalize_expected_sha256(expected_sha256)
             if not old_text:
                 raise ActuatorSecurityError("old_text must not be empty.")
             target = self.resolve(root_id, path)
@@ -196,7 +299,10 @@ class WorkspaceOps:
                 raise ActuatorSecurityError("Target is not a file.")
             if target.stat().st_size > MAX_READ_BYTES:
                 raise ActuatorSecurityError("File is too large to edit safely.")
-            text = target.read_text(encoding="utf-8", errors="strict")
+            snapshot = target.read_bytes()
+            before_sha = sha256_bytes(snapshot)
+            self._assert_expected_sha256(expected_hash, before_sha)
+            text = snapshot.decode("utf-8", errors="strict")
             count = text.count(old_text)
             expected = int(expected_replacements)
             if count != expected:
@@ -205,18 +311,22 @@ class WorkspaceOps:
             if len(updated.encode("utf-8")) > MAX_WRITE_BYTES:
                 raise ActuatorSecurityError("Edited file would exceed the write-size limit.")
 
-            before_sha = self._sha256_file(target)
             try:
-                backup = self.backups.create(root_id, str(self.root(root_id)), relative, target)
+                backup = self.backups.create_bytes(
+                    root_id, str(self.root(root_id)), relative, snapshot
+                )
             except ValueError as exc:
                 raise ActuatorSecurityError(str(exc)) from exc
+            self._assert_live_sha256(target, before_sha)
             self._atomic_write(target, updated)
             after_sha = self._sha256_file(target)
             result = {
                 "path": path,
                 "replacements": count,
                 "backup_id": backup.backup_id,
+                "before_sha256": before_sha,
                 "sha256": after_sha,
+                "guarded": expected_hash is not None,
             }
             self._audit_event(
                 action,
@@ -226,10 +336,14 @@ class WorkspaceOps:
                 path=relative,
                 replacements=count,
                 backup_id=backup.backup_id,
+                expected_sha256=expected_hash,
                 before_sha256=before_sha,
                 after_sha256=after_sha,
             )
             return result
+        except FileChangedError as exc:
+            self._audit_conflict(action, root_id=root_id, path=path, exc=exc)
+            raise
         except Exception as exc:
             self._audit_event(action, status="error", root_id=root_id, path=path, error=str(exc))
             raise
