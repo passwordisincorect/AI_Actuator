@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 from pathlib import Path
 from urllib.parse import parse_qs
 
@@ -15,13 +16,25 @@ from starlette.routing import Route
 
 from . import __version__
 from .config import ActuatorConfig, default_config_path, load_config, save_config
-from .ops import WorkspaceOps
+from .ops import FileChangedError, WorkspaceOps
 from .runtime import RuntimeState, create_runtime
 from .security import ActuatorSecurityError
 from .tunnel import TunnelError
 
 
 def _as_tool_error(exc: Exception) -> ToolError:
+    if isinstance(exc, FileChangedError):
+        return ToolError(
+            json.dumps(
+                {
+                    "error": "file_changed",
+                    "message": str(exc),
+                    "expected_sha256": exc.expected_sha256,
+                    "actual_sha256": exc.actual_sha256,
+                },
+                separators=(",", ":"),
+            )
+        )
     return ToolError(str(exc))
 
 
@@ -45,8 +58,10 @@ def build_mcp(config_path: Path | None = None) -> tuple[MCPServer, ActuatorConfi
             raise _as_tool_error(exc)
 
     @mcp.tool(annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False))
-    def local_read_text_file(root_id: int, path: str, start_line: int = 1, end_line: int = 400) -> str:
-        """Read up to 1000 numbered lines from a UTF-8-ish text file in a trusted workspace."""
+    def local_read_text_file(
+        root_id: int, path: str, start_line: int = 1, end_line: int = 400
+    ) -> dict[str, object]:
+        """Read numbered text plus the full-file SHA-256 used by guarded writes/edits."""
         try:
             return ops.read_text(root_id, path, start_line, end_line)
         except (ActuatorSecurityError, OSError, UnicodeError) as exc:
@@ -68,10 +83,16 @@ def build_mcp(config_path: Path | None = None) -> tuple[MCPServer, ActuatorConfi
             open_world_hint=False,
         )
     )
-    def local_write_text_file(root_id: int, path: str, content: str, overwrite: bool = False) -> dict[str, object]:
-        """Create or overwrite one text file inside a trusted workspace. Requires workspace-write permission."""
+    def local_write_text_file(
+        root_id: int,
+        path: str,
+        content: str,
+        overwrite: bool = False,
+        expected_sha256: str = "",
+    ) -> dict[str, object]:
+        """Create/overwrite text. For overwrite, pass the SHA-256 returned by the latest read."""
         try:
-            return ops.write_text(root_id, path, content, overwrite)
+            return ops.write_text(root_id, path, content, overwrite, expected_sha256)
         except (ActuatorSecurityError, OSError) as exc:
             raise _as_tool_error(exc)
 
@@ -89,10 +110,13 @@ def build_mcp(config_path: Path | None = None) -> tuple[MCPServer, ActuatorConfi
         old_text: str,
         new_text: str,
         expected_replacements: int = 1,
+        expected_sha256: str = "",
     ) -> dict[str, object]:
-        """Exact-match text edit with a required replacement count. No change occurs if the count differs."""
+        """Exact-match edit. Pass latest read SHA-256 to reject stale edits before any mutation."""
         try:
-            return ops.edit_text(root_id, path, old_text, new_text, expected_replacements)
+            return ops.edit_text(
+                root_id, path, old_text, new_text, expected_replacements, expected_sha256
+            )
         except (ActuatorSecurityError, OSError, UnicodeError) as exc:
             raise _as_tool_error(exc)
 
@@ -328,10 +352,10 @@ button:disabled{{opacity:.45;cursor:not-allowed}} code{{background:#eef0f4;paddi
 </div>
 
 <div class='card'>
-<h2>Safety History — v0.2.1</h2>
+<h2>Safety History — v0.2.2</h2>
 <p><b>Automatic backups:</b> <code>{html.escape(str(path.parent / 'backups'))}</code></p>
 <p><b>Audit log:</b> <code>{html.escape(str(path.parent / 'audit.jsonl'))}</code></p>
-<p class='muted'>Mỗi lần overwrite/edit sẽ tạo backup trước khi ghi. Rollback cũng tạo safety backup của trạng thái hiện tại, nên có thể hoàn tác lần rollback tiếp theo.</p>
+<p class='muted'>Overwrite/edit có thể nhận expected_sha256 từ lần đọc gần nhất. Nếu file đã đổi, thao tác bị chặn trước khi ghi; backup/rollback/audit của v0.2.1 vẫn được giữ nguyên.</p>
 </div>
 
 <div class='card'>
