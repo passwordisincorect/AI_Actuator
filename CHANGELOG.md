@@ -2,6 +2,33 @@
 
 Tất cả thay đổi đáng chú ý của AI_Actuator sẽ được ghi lại tại đây.
 
+## [0.2.0] - 2026-09-09
+
+Mốc phát hành mở đầu cho nhánh 0.2.x của AI_Actuator.
+
+### Thay đổi
+
+- Nâng version project và package lên `0.2.0`.
+- Giữ nguyên nền tảng local MCP an toàn đã hoàn thiện ở nhánh 0.1.x.
+- Thiết lập mốc phát triển tiếp theo cho remote MCP / Cloudflare Tunnel.
+
+### Phạm vi hiện tại
+
+- MCP server local trên Windows.
+- Bearer authentication.
+- Trusted workspaces với `read-only` và `workspace-write`.
+- Đọc, tìm kiếm, ghi và exact-edit file văn bản.
+- `git status` và `git diff` read-only.
+- SecurityPolicy chống path traversal, symlink/reparse point và truy cập đường dẫn nhạy cảm.
+
+### Chưa triển khai trong v0.2.0
+
+- Cloudflare / remote MCP cho ChatGPT.
+- Tách riêng public MCP endpoint và local `/setup`.
+- Claude Desktop Extension `.mcpb`.
+- GUI Windows, system tray và auto-start.
+- Windows installer hoàn chỉnh.
+
 ## [0.1.2] - 2026-09-09
 
 Bản cập nhật maintenance cho nhánh 0.1.x.
