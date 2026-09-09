@@ -47,6 +47,7 @@ def test_stale_edit_is_rejected_before_backup_or_write(tmp_path: Path):
     f.write_text("speed = 1000;\n", encoding="utf-8")
     stale_sha = str(ops.read_text(0, "main.c")["sha256"])
 
+    # Simulate the user/editor changing the file after the AI read it.
     f.write_text("speed = 1500;\n", encoding="utf-8")
 
     with pytest.raises(FileChangedError) as caught:
