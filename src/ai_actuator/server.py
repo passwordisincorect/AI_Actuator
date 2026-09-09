@@ -329,6 +329,7 @@ def build_admin_app(runtime_or_path: RuntimeState | Path | None = None):
         logs_html = f"<details><summary>Recent cloudflared logs</summary><pre>{html.escape(logs)}</pre></details>" if logs else ""
         start_disabled = "disabled" if tunnel_status.running else ""
         stop_disabled = "" if tunnel_status.running else "disabled"
+        public_attr = html.escape(public_mcp_url, quote=True)
 
         body = f"""
 <!doctype html><html><head><meta charset='utf-8'><title>AI_Actuator</title>
