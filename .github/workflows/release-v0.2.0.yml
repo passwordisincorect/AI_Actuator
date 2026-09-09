@@ -1,4 +1,4 @@
-name: Validate and Publish v0.2.0
+name: Validate and Tag v0.2.0
 
 on:
   push:
@@ -32,23 +32,11 @@ jobs:
       - name: Run test suite
         run: python -m pytest
 
-      - name: Republish corrected GitHub Release
+      - name: Restore corrected v0.2.0 tag
         env:
-          GH_TOKEN: ${{ github.token }}
           TARGET_COMMIT: 4226d6e2aea06ae0ba14e74eee887f4055da4928
         shell: bash
         run: |
           set -euo pipefail
-
-          if gh release view v0.2.0 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release delete v0.2.0 --repo "$GITHUB_REPOSITORY" --yes
-          fi
-
-          git push origin :refs/tags/v0.2.0 || true
-          git tag -d v0.2.0 || true
-
-          gh release create v0.2.0 \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$TARGET_COMMIT" \
-            --title "AI_Actuator v0.2.0" \
-            --notes "Corrected v0.2.0 synchronized with the completed AI_Actuator chat implementation: Admin remains local-only on 127.0.0.1:8765, MCP moves to 127.0.0.1:8766, /health is exposed on 8766, non-MCP paths on the MCP port return 404, and Bearer authentication remains required for /mcp. Cloudflare remote exposure itself is not included yet."
+          git tag -f v0.2.0 "$TARGET_COMMIT"
+          git push --force origin refs/tags/v0.2.0
