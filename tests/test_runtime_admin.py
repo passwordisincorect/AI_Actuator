@@ -25,7 +25,7 @@ def free_port() -> int:
 
 class RuntimeAdminTests(unittest.TestCase):
     def make_config(self, root: Path) -> Path:
-        project = Path(r"D:\MCP-Test\ChatGPT-Actuator")
+        project = Path(__file__).resolve().parents[1]
         raw = json.loads((project / "config" / "config.json").read_text(encoding="utf-8"))
         raw["admin"]["host"] = "127.0.0.1"
         raw["admin"]["port"] = free_port()
