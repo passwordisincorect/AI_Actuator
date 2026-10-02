@@ -1,173 +1,154 @@
-# AI_Actuator v0.2.2
+# ChatGPT-Actuator 1.0.0
 
-AI_Actuator is a safe local MCP actuator for Windows. The AI remains the reasoning layer; AI_Actuator provides constrained filesystem and Git tools inside explicitly trusted workspaces.
+ChatGPT-Actuator is a permission-gated Windows MCP actuator for ChatGPT.
 
-## v0.2.2 highlights
+Version 1.0.0 is the first stable release of the current Windows control-plane architecture.
 
-v0.2.2 adds **optimistic concurrency protection** so an AI does not silently edit an out-of-date copy of a file.
+## Runtime
 
-- `local_read_text_file` now returns the selected numbered content plus the **SHA-256 of the complete file**.
-- `local_edit_text_file` accepts optional `expected_sha256`.
-- `local_write_text_file` accepts optional `expected_sha256` when overwriting.
-- If the live file hash differs from the expected hash, AI_Actuator raises a structured `file_changed` tool error and **does not modify the file**.
-- The live file is checked again immediately before the atomic replacement to reduce read/check/write race risk.
-- Backups are created from the exact byte snapshot that was hash-checked, rather than re-reading the live file.
-- Audit events record `expected_sha256`, `before_sha256`, and `after_sha256` on guarded success, and expected/actual hashes on conflicts.
+- Windows desktop actuator
+- MCP over stdio behind OpenAI Secure MCP Tunnel
+- 45 MCP tools
+- local Admin UI on http://127.0.0.1:8765/
+- tunnel profile: chatgpt-actuator
+- default tunnel health: http://127.0.0.1:8081/healthz
 
-v0.2.1 safety history remains:
+## Capability groups
 
-- Automatic backup before overwrite/edit.
-- Rollback with a safety backup of the current file.
-- Append-only audit log.
-- SHA-256 backup integrity validation.
-- Up to 20 backups retained per file.
+- Filesystem
+- System information
+- Process management
+- PowerShell
+- Screen capture
+- Window management
+- Mouse
+- Keyboard
+- Clipboard
+- Verified text input
+- Windows UI Automation
 
-v0.2.0 remote architecture remains:
+## Security model
 
-- Local-only admin dashboard on `127.0.0.1:8765`.
-- MCP + health endpoint on `127.0.0.1:8766`.
-- Built-in Cloudflare Quick Tunnel manager.
-- Dashboard Start/Stop/Copy URL controls.
-- Dynamic Quick Tunnel hostname allowlisting in memory.
-- Bearer authentication and trusted-root security policy.
-- No arbitrary shell, delete tool, Codex task runner, or Claude Code agent.
+ChatGPT-Actuator keeps execution behind explicit permission gates. The local Admin UI can hot-apply capability changes without restarting the tunnel.
 
-## Recommended guarded edit flow
+Important protections include:
 
-```text
-local_read_text_file
-  ↓
-content + sha256
-  ↓
-AI reasons about the file
-  ↓
-local_edit_text_file(expected_sha256=<sha from read>)
-  ↓
-AI_Actuator checks the live SHA-256
-  ├─ mismatch → file_changed, no write
-  └─ match    → exact-match check → backup → re-check → atomic edit → audit
-```
+- allowed filesystem roots
+- root deletion/move protection
+- path traversal and link/junction escape protection
+- protected actuator/tunnel process chain
+- protected critical Windows processes
+- constrained PowerShell working roots
+- target-window verification for keyboard input
+- semantic UI Automation actions with window-bound element references
+- password controls excluded from generic value read/set
+- audit logging without plaintext keyboard/clipboard secrets
+- loopback-only Admin UI with a random per-process session token
 
-Example read result:
+A stale Admin browser tab automatically reloads after a process restart and restores unsaved permission choices for review.
 
-```json
-{
-  "path": "src/main.c",
-  "content": "1: int main(void) { ... }",
-  "sha256": "8e77...",
-  "bytes": 1234,
-  "start_line": 1,
-  "end_line": 80,
-  "total_lines": 80
-}
-```
+## Deployment
 
-Use that hash when editing:
+Setup:
 
-```text
-root_id: 0
-path: src/main.c
-old_text: speed = 1000;
-new_text: speed = 2000;
-expected_replacements: 1
-expected_sha256: <sha256 returned by the read>
-```
+    .\scripts\setup.ps1
 
-If VS Code, a build step, Git, or another program changes the file after the read, the edit is rejected. Re-read the file, reason again using the new content, then retry with the new SHA-256.
+Clean/recreate the virtual environment:
 
-`expected_sha256` is optional for backward compatibility. For AI-driven edits and overwrites, passing it is strongly recommended.
+    .\scripts\setup.ps1 -RecreateVenv
 
-## MCP tools
+Deployment status:
 
-- `local_list_roots`
-- `local_list_directory`
-- `local_read_text_file` — returns content + full-file SHA-256
-- `local_search_text`
-- `local_write_text_file` — supports `expected_sha256` for overwrite
-- `local_edit_text_file` — supports `expected_sha256`
-- `local_list_backups`
-- `local_rollback_text_file`
-- `local_read_audit_log`
-- `local_git_status`
-- `local_git_diff`
+    .\scripts\deployment-status.ps1
 
-## Backup / rollback / audit storage
+Tunnel lifecycle:
 
-Normally stored under:
+    .\scripts\tunnel-manager.ps1 -Action Status
+    .\scripts\tunnel-manager.ps1 -Action Start
+    .\scripts\tunnel-manager.ps1 -Action Stop
+    .\scripts\tunnel-manager.ps1 -Action Restart
 
-```text
-%LOCALAPPDATA%\AI_Actuator\backups\
-%LOCALAPPDATA%\AI_Actuator\audit.jsonl
-```
+Open Admin:
 
-They are outside the trusted project workspace. Audit records contain metadata and hashes, never file contents or Bearer tokens.
+    .\scripts\open-admin.ps1
 
-## Install / upgrade
+## Autostart
 
-```powershell
-cd D:\AI_Actuator
-.\.venv\Scripts\python.exe -m pip install -e .
-```
+Autostart uses Windows Task Scheduler at interactive user logon. A Windows Service is intentionally not used because mouse, keyboard, window and UI Automation features need the interactive desktop session.
+
+Protect the current runtime API key with Windows DPAPI:
+
+    .\scripts\save-runtime-key.ps1
+
+Install and check autostart:
+
+    .\scripts\install-autostart.ps1
+    .\scripts\autostart-status.ps1
+
+Remove autostart:
+
+    .\scripts\remove-autostart.ps1
+
+Remove the DPAPI-protected runtime key separately:
+
+    .\scripts\remove-runtime-key.ps1
+
+The plaintext key is not written to disk by save-runtime-key.ps1.
+
+## Release package
+
+Build:
+
+    .\scripts\build-release.ps1
+
+The generated bootstrap ZIP is not a standalone executable. It requires Windows, Python 3.12 x64, OpenAI tunnel-client, and an authorized tunnel profile.
+
+The release builder:
+
+- creates a deterministic ZIP
+- builds a Python wheel
+- creates SHA256SUMS.txt
+- creates release-manifest.json
+- validates that sensitive/local runtime state is not included
+- uses a safe-default config inside the artifact
+- excludes local build metadata such as *.egg-info
+
+### Safe-default artifact config
+
+On a fresh extracted package:
+
+- filesystem is read-only and rooted to the extracted project after setup
+- process listing is enabled, but start/stop/force-kill are disabled
+- PowerShell is disabled
+- screen capture is disabled
+- window inspection is enabled, but mutations are disabled
+- mouse, keyboard and clipboard are disabled
+- verified input is disabled
+- UI Automation discovery is enabled, but semantic actions are disabled
+- Admin UI is enabled on loopback only
+
+Permissions can then be explicitly enabled from the local Admin UI.
+
+## Release verification
 
 Run:
 
-```powershell
-.\.venv\Scripts\python.exe -m ai_actuator
-```
+    .\scripts\verify-release.ps1
 
-Dashboard:
+The verifier checks:
 
-```text
-http://127.0.0.1:8765/setup
-```
+1. PowerShell syntax
+2. Python compilation
+3. pip dependency consistency
+4. full 39-test regression suite with ResourceWarning treated as an error
+5. isolated MCP/Admin runtime smoke test
+6. reproducible ZIP and wheel builds
+7. final release artifact build
 
-Local MCP:
+Expected MCP tool count: 45.
 
-```text
-http://127.0.0.1:8766/mcp
-```
+Before v1.0.0 was published, the release candidate also passed live end-to-end testing through ChatGPT -> Secure MCP Tunnel -> ChatGPT-Actuator -> Windows, including UI Automation tab selection, verified text replacement/read-back, dialog handling and autostart-after-reboot.
 
-Health:
+## Contribution and safety
 
-```text
-http://127.0.0.1:8766/health
-```
-
-## Cloudflare Quick Tunnel
-
-From `/setup`, click **Start Tunnel** and use the generated URL in the MCP client:
-
-```text
-https://random-name.trycloudflare.com/mcp
-```
-
-Header:
-
-```text
-Authorization: Bearer <token>
-```
-
-Quick Tunnel URLs change after restart and are intended for development/testing.
-
-## Security defaults
-
-- Servers bind only to `127.0.0.1`.
-- `/setup` stays isolated on port 8765 and is not exposed by the built-in tunnel.
-- MCP Host validation remains enabled.
-- Default workspace permission is `read-only`.
-- Paths must be relative to a configured trusted root.
-- Path traversal, sensitive paths, symlinks/junctions/reparse points are blocked.
-- Read/write text size is limited to about 1 MB per file.
-- Existing files too large for a safety backup are refused for overwrite/edit.
-- No arbitrary shell or permanent delete tool.
-
-Do not grant an entire drive such as `D:\` with `workspace-write`; grant only the project folders the AI actually needs.
-
-## Tests
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-.\.venv\Scripts\python.exe -m pytest
-```
-
-v0.2.2 adds tests for stale edit rejection, stale overwrite rejection, guarded success, missing-file conflicts, hash validation, exact checked-snapshot backups, and existing backup/rollback/audit/security/tunnel behavior.
+Keep Windows-control permissions conservative by default. Do not commit local credentials, DPAPI files, logs, deployment state or tunnel secrets.
